@@ -273,8 +273,16 @@ const ChannelsTable = () => {
     },
     {
       key: COLUMN_KEYS.KEY,
-      title: t('名称'),
+      title: t('密钥'),
       dataIndex: 'key',
+      render: (text) => (
+        <Typography.Text
+          ellipsis={{ showTooltip: true }} // showTooltip handles the full text on hover
+          style={{ maxWidth: 200 }} // Limit width to 200px
+        >
+          {text}
+        </Typography.Text>
+      ),
     },
     {
       key: COLUMN_KEYS.GROUP,
