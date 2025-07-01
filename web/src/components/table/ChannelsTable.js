@@ -173,6 +173,7 @@ const ChannelsTable = () => {
   const COLUMN_KEYS = {
     ID: 'id',
     NAME: 'name',
+    KEY: 'key',
     GROUP: 'group',
     TYPE: 'type',
     STATUS: 'status',
@@ -222,6 +223,7 @@ const ChannelsTable = () => {
     return {
       [COLUMN_KEYS.ID]: true,
       [COLUMN_KEYS.NAME]: true,
+      [COLUMN_KEYS.KEY]: true,
       [COLUMN_KEYS.GROUP]: true,
       [COLUMN_KEYS.TYPE]: true,
       [COLUMN_KEYS.STATUS]: true,
@@ -268,6 +270,11 @@ const ChannelsTable = () => {
       key: COLUMN_KEYS.NAME,
       title: t('名称'),
       dataIndex: 'name',
+    },
+    {
+      key: COLUMN_KEYS.KEY,
+      title: t('名称'),
+      dataIndex: 'key',
     },
     {
       key: COLUMN_KEYS.GROUP,
@@ -675,10 +682,8 @@ const ChannelsTable = () => {
   const [currentTestChannel, setCurrentTestChannel] = useState(null);
   const [modelSearchKeyword, setModelSearchKeyword] = useState('');
   const [modelTestResults, setModelTestResults] = useState({});
-  const [testingModels, setTestingModels] = useState(new Set());
-  const [isBatchTesting, setIsBatchTesting] = useState(false);
-  const [testQueue, setTestQueue] = useState([]);
-  const [isProcessingQueue, setIsProcessingQueue] = useState(false);
+  const [testingModels, setTestingModels] = useState(new Set()); // Tracks models currently being tested
+  const [isBatchTesting, setIsBatchTesting] = useState(false); // Indicates if a batch test is in progress
   const [activeTypeKey, setActiveTypeKey] = useState('all');
   const [typeCounts, setTypeCounts] = useState({});
   const requestCounter = useRef(0);
@@ -797,7 +802,6 @@ const ChannelsTable = () => {
     let channelDates = [];
     let channelTags = {};
     for (let i = 0; i < channels.length; i++) {
-      channels[i].key = '' + channels[i].id;
       if (!enableTagMode) {
         channelDates.push(channels[i]);
       } else {
@@ -1093,19 +1097,18 @@ const ChannelsTable = () => {
     }
   };
 
-  const processTestQueue = async () => {
-    if (!isProcessingQueue || testQueue.length === 0) return;
-
-    const { channel, model } = testQueue[0];
+  const testChannel = async (channel, model) => {
+    const testKey = `${channel.id}-${model}`;
+    // Add the model to the set of currently testing models
+    setTestingModels(prev => new Set(prev).add(model));
 
     try {
-      setTestingModels(prev => new Set([...prev, model]));
       const res = await API.get(`/api/channel/test/${channel.id}?model=${model}`);
       const { success, message, time } = res.data;
 
       setModelTestResults(prev => ({
         ...prev,
-        [`${channel.id}-${model}`]: { success, time }
+        [testKey]: { success, time, message } // Store message for failed tests
       }));
 
       if (success) {
@@ -1113,7 +1116,7 @@ const ChannelsTable = () => {
           ch.response_time = time * 1000;
           ch.test_time = Date.now() / 1000;
         });
-        if (!model) {
+        if (!model) { // Only show info for general channel test (not specific model test)
           showInfo(
             t('通道 ${name} 测试成功，耗时 ${time.toFixed(2)} 秒。')
               .replace('${name}', channel.name)
@@ -1121,36 +1124,26 @@ const ChannelsTable = () => {
           );
         }
       } else {
-        showError(message);
+        // If the main test (model='') fails, show error. For specific models, error is in modal.
+        if (!model) {
+          showError(message);
+        }
       }
     } catch (error) {
-      showError(error.message);
+      setModelTestResults(prev => ({
+        ...prev,
+        [testKey]: { success: false, time: 0, message: error.message }
+      }));
+      if (!model) { // Only show error for general channel test (not specific model test)
+        showError(error.message);
+      }
     } finally {
+      // Remove the model from the set of currently testing models
       setTestingModels(prev => {
         const newSet = new Set(prev);
         newSet.delete(model);
         return newSet;
       });
-    }
-
-    // 移除已处理的测试
-    setTestQueue(prev => prev.slice(1));
-  };
-
-  // 监听队列变化
-  useEffect(() => {
-    if (testQueue.length > 0 && isProcessingQueue) {
-      processTestQueue();
-    } else if (testQueue.length === 0 && isProcessingQueue) {
-      setIsProcessingQueue(false);
-      setIsBatchTesting(false);
-    }
-  }, [testQueue, isProcessingQueue]);
-
-  const testChannel = async (record, model) => {
-    setTestQueue(prev => [...prev, { channel: record, model }]);
-    if (!isProcessingQueue) {
-      setIsProcessingQueue(true);
     }
   };
 
@@ -1158,31 +1151,31 @@ const ChannelsTable = () => {
     if (!currentTestChannel) return;
 
     setIsBatchTesting(true);
+    setModelTestResults({}); // Clear previous results for a new batch test
 
-    const models = currentTestChannel.models
+    // Filter models based on the search keyword for the batch test
+    const modelsToTest = currentTestChannel.models
       .split(',')
       .filter((model) =>
         model.toLowerCase().includes(modelSearchKeyword.toLowerCase())
       );
 
-    setTestQueue(models.map(model => ({
-      channel: currentTestChannel,
-      model
-    })));
-    setIsProcessingQueue(true);
+    // Create an array of promises for each model test, and execute them concurrently
+    const testPromises = modelsToTest.map(model => testChannel(currentTestChannel, model));
+
+    // Wait for all promises to settle (either fulfill or reject)
+    await Promise.allSettled(testPromises);
+
+    setIsBatchTesting(false);
+    showInfo(t('所有模型测试已完成。'));
   };
 
   const handleCloseModal = () => {
-    if (isBatchTesting) {
-      // 清空测试队列来停止测试
-      setTestQueue([]);
-      setIsProcessingQueue(false);
-      setIsBatchTesting(false);
-      showSuccess(t('已停止测试'));
-    } else {
-      setShowModelTestModal(false);
-      setModelSearchKeyword('');
-    }
+    setIsBatchTesting(false);
+    setShowModelTestModal(false);
+    setModelSearchKeyword('');
+    setModelTestResults({}); // Clear test results when modal closes
+    setTestingModels(new Set()); // Clear any models that might still be in a testing state
   };
 
   const channelTypeCounts = useMemo(() => {
@@ -1461,6 +1454,15 @@ const ChannelsTable = () => {
       showError(message);
     }
   };
+
+  const modelsToTestFiltered = useMemo(() => {
+    if (!currentTestChannel) return [];
+    return currentTestChannel.models
+      .split(',')
+      .filter((model) =>
+        model.toLowerCase().includes(modelSearchKeyword.toLowerCase())
+      );
+  }, [currentTestChannel, modelSearchKeyword]);
 
   const renderHeader = () => (
     <div className="flex flex-col w-full">
@@ -1881,17 +1883,11 @@ const ChannelsTable = () => {
               className="!rounded-full"
               onClick={batchTestModels}
               loading={isBatchTesting}
-              disabled={isBatchTesting}
+              disabled={isBatchTesting || (modelsToTestFiltered.length > 0 && modelsToTestFiltered.every(model => modelTestResults[`${currentTestChannel.id}-${model}`]))}
             >
               {isBatchTesting ? t('测试中...') : t('批量测试${count}个模型').replace(
                 '${count}',
-                currentTestChannel
-                  ? currentTestChannel.models
-                    .split(',')
-                    .filter((model) =>
-                      model.toLowerCase().includes(modelSearchKeyword.toLowerCase())
-                    ).length
-                  : 0
+                modelsToTestFiltered.length
               )}
             </Button>
           </div>
@@ -1962,6 +1958,11 @@ const ChannelsTable = () => {
                               {t('请求时长: ${time}s').replace('${time}', testResult.time.toFixed(2))}
                             </Typography.Text>
                           )}
+                          {!testResult.success && testResult.message && (
+                            <Tooltip content={testResult.message}>
+                               <AlertCircle size={14} color="red" />
+                            </Tooltip>
+                          )}
                         </div>
                       );
                     }
@@ -1987,12 +1988,7 @@ const ChannelsTable = () => {
                     }
                   }
                 ]}
-                dataSource={currentTestChannel.models
-                  .split(',')
-                  .filter((model) =>
-                    model.toLowerCase().includes(modelSearchKeyword.toLowerCase())
-                  )
-                  .map((model) => ({
+                dataSource={modelsToTestFiltered.map((model) => ({
                     model,
                     key: model
                   }))}

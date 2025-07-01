@@ -104,7 +104,7 @@ const EditChannel = (props) => {
   const [modelOptions, setModelOptions] = useState([]);
   const [groupOptions, setGroupOptions] = useState([]);
   const [basicModels, setBasicModels] = useState([]);
-  const [fullModels, setFullModels] = useState([]);
+  const [fullModels, setFullModels] = useState([]); // Keep this for potential future use or if other logic relies on it
   const [customModel, setCustomModel] = useState('');
   const [modalImageUrl, setModalImageUrl] = useState('');
   const [isModalOpenurl, setIsModalOpenurl] = useState(false);
@@ -268,7 +268,7 @@ const EditChannel = (props) => {
         value: model.id,
       }));
       setOriginModelOptions(localModelOptions);
-      setFullModels(res.data.data.map((model) => model.id));
+      setFullModels(res.data.data.map((model) => model.id)); // Still populate fullModels
       setBasicModels(
         res.data.data
           .filter((model) => {
@@ -421,6 +421,21 @@ useEffect(() => {
       );
     } else {
       showInfo(t('未发现新增模型'));
+    }
+  };
+
+  const copySelectedModels = async () => {
+    if (inputs.models && inputs.models.length > 0) {
+      const modelsString = inputs.models.join(',');
+      try {
+        await navigator.clipboard.writeText(modelsString);
+        showSuccess(t('已复制选中的模型到剪贴板！'));
+      } catch (err) {
+        showError(t('复制失败，请手动复制'));
+        console.error('Failed to copy models: ', err);
+      }
+    } else {
+      showInfo(t('当前没有选中的模型。'));
     }
   };
 
@@ -808,11 +823,11 @@ useEffect(() => {
                   </Button>
                   <Button
                     type='secondary'
-                    onClick={() => handleInputChange('models', fullModels)}
+                    onClick={copySelectedModels} // Modified function
                     size="large"
                     className="!rounded-lg"
                   >
-                    {t('填入所有模型')}
+                    {t('复制已选模型')} {/* Modified text */}
                   </Button>
                   <Button
                     type='tertiary'

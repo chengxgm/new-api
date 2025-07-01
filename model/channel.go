@@ -2,6 +2,7 @@ package model
 
 import (
 	"encoding/json"
+	"fmt"
 	"one-api/common"
 	"strings"
 	"sync"
@@ -109,7 +110,7 @@ func GetAllChannels(startIdx int, num int, selectAll bool, idSort bool) ([]*Chan
 	if selectAll {
 		err = DB.Order(order).Find(&channels).Error
 	} else {
-		err = DB.Order(order).Limit(num).Offset(startIdx).Omit("key").Find(&channels).Error
+		err = DB.Order(order).Limit(num).Offset(startIdx).Find(&channels).Error
 	}
 	return channels, err
 }
@@ -145,7 +146,7 @@ func SearchChannels(keyword string, group string, model string, idSort bool) ([]
 	}
 
 	// 构造基础查询
-	baseQuery := DB.Model(&Channel{}).Omit("key")
+	baseQuery := DB.Model(&Channel{})
 
 	// 构造WHERE子句
 	var whereClause string
@@ -179,12 +180,42 @@ func GetChannelById(id int, selectAll bool) (*Channel, error) {
 	if selectAll {
 		err = DB.First(&channel, "id = ?", id).Error
 	} else {
-		err = DB.Omit("key").First(&channel, "id = ?", id).Error
+		err = DB.First(&channel, "id = ?", id).Error
 	}
 	return &channel, err
 }
 
+// IsChannelKeyDuplicated 检查数据库中是否存在指定密钥的渠道。
+func IsChannelKeyDuplicated(key string) (bool, error) {
+	var count int64
+	err := DB.Model(&Channel{}).Where("key = ?", key).Count(&count).Error
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
 func BatchInsertChannels(channels []Channel) error {
+	// 1. 检查当前批量中是否存在重复的密钥
+	seenKeys := make(map[string]bool)
+	for _, channel := range channels {
+		if seenKeys[channel.Key] {
+			return fmt.Errorf("渠道密钥 '%s' 在当前批量中重复", channel.Key)
+		}
+		seenKeys[channel.Key] = true
+	}
+
+	// 2. 检查数据库中是否存在重复的密钥
+	for _, channel := range channels {
+		exists, err := IsChannelKeyDuplicated(channel.Key)
+		if err != nil {
+			return err
+		}
+		if exists {
+			return fmt.Errorf("渠道密钥 '%s' 已存在", channel.Key)
+		}
+	}
+
 	var err error
 	err = DB.Create(&channels).Error
 	if err != nil {
@@ -478,7 +509,7 @@ func SearchTags(keyword string, group string, model string, idSort bool) ([]*str
 	}
 
 	// 构造基础查询
-	baseQuery := DB.Model(&Channel{}).Omit("key")
+	baseQuery := DB.Model(&Channel{})
 
 	// 构造WHERE子句
 	var whereClause string
@@ -605,7 +636,7 @@ func GetChannelsByType(startIdx int, num int, idSort bool, channelType int) ([]*
 	if idSort {
 		order = "id desc"
 	}
-	err := DB.Where("type = ?", channelType).Order(order).Limit(num).Offset(startIdx).Omit("key").Find(&channels).Error
+	err := DB.Where("type = ?", channelType).Order(order).Limit(num).Offset(startIdx).Find(&channels).Error
 	return channels, err
 }
 
