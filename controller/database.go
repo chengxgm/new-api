@@ -250,60 +250,61 @@ func CreateTableData(c *gin.Context) {
 
 // UpdateTableData godoc
 // @Summary Update table data
-// @Description Update an existing record in a specific table.
+// @Description Update an existing record in a specific table (condition+update).
 // @Tags Database
 // @Accept json
 // @Produce json
 // @Param name path string true "Table Name"
-// @Param id path int true "Record ID"
-// @Param data body map[string]interface{} true "Data to update"
+// @Param body body map[string]interface{} true "Update request {condition:{},update:{}}"
 // @Success 200 {object} common.Response
 // @Failure 400 {object} common.Response
 // @Failure 500 {object} common.Response
-// @Router /api/database/tables/{name}/{id} [put]
+// @Router /api/database/tables/{name} [put]
 func UpdateTableData(c *gin.Context) {
 	tableName := c.Param("name")
-	id := c.Param("id")
-	if tableName == "" || id == "" {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"message": "Table name and ID are required",
-		})
+	if tableName == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "Table name is required"})
 		return
 	}
 
-	var data map[string]interface{}
-	if err := c.ShouldBindJSON(&data); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success": false,
-			"message": "Invalid request body: " + err.Error(),
-		})
+	var req struct {
+		Condition map[string]interface{} `json:"condition"`
+		Update    map[string]interface{} `json:"update"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "Invalid request body: " + err.Error()})
+		return
+	}
+	if len(req.Condition) == 0 || len(req.Update) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "Both condition and update are required"})
 		return
 	}
 
-	// GORM will automatically use the primary key for updates if it's present in the map.
-	// Assuming 'id' is the primary key column name.
-	// For generic tables, we need to be careful about the primary key name.
-	// For simplicity, we'll assume 'id' is the primary key column name for now.
-	// A more robust solution would involve querying table info to find the actual primary key.
-	err := model.DB.Table(tableName).Where("id = ?", id).Updates(data).Error
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"success": false,
-			"message": "Failed to update record: " + err.Error(),
-		})
+	where := ""
+	args := []interface{}{}
+	for k, v := range req.Condition {
+		if where != "" {
+			where += " AND "
+		}
+		where += fmt.Sprintf("`%s` = ?", k)
+		args = append(args, v)
+	}
+
+	tx := model.DB.Table(tableName).Where(where, args...).Updates(req.Update)
+	if tx.Error != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "Failed to update record: " + tx.Error.Error(), "rows": tx.RowsAffected})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": "Record updated successfully",
-	})
+	c.JSON(http.StatusOK, gin.H{"success": true, "message": "Record updated successfully", "rows": tx.RowsAffected})
 }
 
+type BulkUpdateItem struct {
+	Condition map[string]interface{} `json:"condition"`
+	Update    map[string]interface{} `json:"update"`
+}
 type BulkUpdateRequest struct {
-	IDs    []int                  `json:"ids"`
-	Update map[string]interface{} `json:"update"`
+	Items []BulkUpdateItem `json:"items"`
 }
 
 // BulkUpdateTableData godoc
@@ -331,28 +332,48 @@ func BulkUpdateTableData(c *gin.Context) {
 		return
 	}
 
-	if len(req.IDs) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "IDs are required for bulk update"})
+	if len(req.Items) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "Items are required for bulk update"})
 		return
 	}
 
-	if len(req.Update) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "Update data is required"})
-		return
+	results := make([]map[string]interface{}, 0, len(req.Items))
+	for _, item := range req.Items {
+		res := map[string]interface{}{
+			"ok":    true,
+			"error": "",
+		}
+		// 记录id（如有）
+		if idVal, ok := item.Condition["id"]; ok {
+			res["id"] = idVal
+		}
+		// 构造where
+		where := ""
+		args := []interface{}{}
+		for k, v := range item.Condition {
+			if where != "" {
+				where += " AND "
+			}
+			where += fmt.Sprintf("`%s` = ?", k)
+			args = append(args, v)
+		}
+		tx := model.DB.Table(tableName).Where(where, args...).Updates(item.Update)
+		if tx.Error != nil {
+			res["ok"] = false
+			res["error"] = tx.Error.Error()
+		}
+		results = append(results, res)
 	}
 
-	err := model.DB.Table(tableName).Where("id IN (?)", req.IDs).Updates(req.Update).Error
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "Failed to bulk update records: " + err.Error()})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{"success": true, "message": "Records updated successfully"})
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "Bulk update finished",
+		"results": results,
+	})
 }
 
 type BulkDeleteRequest struct {
-	PK  string `json:"pk"`
-	IDs []int  `json:"ids"`
+	Conditions []map[string]interface{} `json:"conditions"`
 }
 
 // BulkDeleteTableData godoc
@@ -380,22 +401,47 @@ func BulkDeleteTableData(c *gin.Context) {
 		return
 	}
 
-	if len(req.IDs) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "IDs are required for bulk delete"})
+	if len(req.Conditions) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "Conditions are required for bulk delete"})
 		return
 	}
 
-	pk := req.PK
-	if pk == "" {
-		pk = "id"
-	}
-	err := model.DB.Table(tableName).Where(fmt.Sprintf("%s IN (?)", pk), req.IDs).Delete(nil).Error
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "Failed to bulk delete records: " + err.Error()})
-		return
+	results := make([]map[string]interface{}, 0, len(req.Conditions))
+	for _, condition := range req.Conditions {
+		res := map[string]interface{}{
+			"ok":    true,
+			"error": "",
+		}
+		// Record the condition (e.g., 'id' if present) for the response
+		if idVal, ok := condition["id"]; ok {
+			res["id"] = idVal
+		} else {
+			// If no 'id', use the full condition map as identifier for response
+			res["condition"] = condition
+		}
+
+		where := ""
+		args := []interface{}{}
+		for k, v := range condition {
+			if where != "" {
+				where += " AND "
+			}
+			where += fmt.Sprintf("`%s` = ?", k)
+			args = append(args, v)
+		}
+		err := model.DB.Table(tableName).Where(where, args...).Delete(nil).Error
+		if err != nil {
+			res["ok"] = false
+			res["error"] = err.Error()
+		}
+		results = append(results, res)
 	}
 
-	c.JSON(http.StatusOK, gin.H{"success": true, "message": "Records deleted successfully"})
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "Bulk delete finished",
+		"results": results,
+	})
 }
 
 // DeleteTableData godoc
@@ -405,29 +451,48 @@ func BulkDeleteTableData(c *gin.Context) {
 // @Accept json
 // @Produce json
 // @Param name path string true "Table Name"
-// @Param id path int true "Record ID"
+// @Param data body map[string]interface{} true "Data to delete (all fields used as condition)"
 // @Success 200 {object} common.Response
 // @Failure 400 {object} common.Response
 // @Failure 500 {object} common.Response
-// @Router /api/database/tables/{name}/{id} [delete]
+// @Router /api/database/tables/{name} [delete]
 func DeleteTableData(c *gin.Context) {
 	tableName := c.Param("name")
-	id := c.Param("id")
-	if tableName == "" || id == "" {
+	if tableName == "" {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"success": false,
-			"message": "Table name and ID are required",
+			"message": "Table name is required",
 		})
 		return
 	}
 
-	// For generic tables, we need to be careful about the primary key name.
-	// Assuming 'id' is the primary key column name for now.
-	err := model.DB.Table(tableName).Where("id = ?", id).Delete(nil).Error
+	var data map[string]interface{}
+	if errBind := c.ShouldBindJSON(&data); errBind != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "Invalid request body: " + errBind.Error(),
+		})
+		return
+	}
+
+	where := ""
+	args := []interface{}{}
+	for k, v := range data {
+		if where != "" {
+			where += " AND "
+		}
+		where += fmt.Sprintf("`%s` = ?", k)
+		args = append(args, v)
+	}
+	tx := model.DB.Table(tableName).Where(where, args...).Delete(nil)
+	err := tx.Error
+	rows := tx.RowsAffected
+
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
 			"message": "Failed to delete record: " + err.Error(),
+			"rows":    rows,
 		})
 		return
 	}
@@ -435,5 +500,6 @@ func DeleteTableData(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "Record deleted successfully",
+		"rows":    rows,
 	})
 }

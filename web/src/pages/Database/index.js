@@ -1,32 +1,31 @@
 // 参考 Token 的写法，对 Database 页面进行了重构，将原有的编辑、新增、批量更新等功能合并到一个 SideSheet 中，
 // 并使用多个 Card 做信息分块展示，保持与 Token 页面相似的布局和体验。
 
-import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Layout,
-  Card,
-  Space,
-  Select,
-  Button,
-  Table,
-  Empty,
-  Spin,
-  SideSheet,
-  Typography,
-  Tag,
-  Popconfirm,
-  Form,
-  Input,
-  Toast,
-} from '@douyinfe/semi-ui';
-import {
-  IconSave,
   IconClose,
-  IconPlusCircle,
-  IconUserGroup,
   IconDelete,
+  IconPlusCircle,
+  IconSave,
   IconServer,
+  IconUserGroup,
 } from '@douyinfe/semi-icons';
+import {
+  Button,
+  Card,
+  Empty,
+  Form,
+  Layout,
+  Popconfirm,
+  Select,
+  SideSheet,
+  Space,
+  Spin,
+  Table,
+  Tag,
+  Toast,
+  Typography,
+} from '@douyinfe/semi-ui';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { API } from '../../helpers';
 
@@ -45,15 +44,39 @@ const { Title, Text } = Typography;
  */
 
 /**
- * 根据 ColumnMeta 找到可用的 rowKey（优先主键 > id 字段 > 第一列）
+ * 根据 ColumnMeta 找到可用的 rowKey（改为始终拼接所有字段作为唯一键）
  * @param {ColumnMeta[]} cols
- * @returns {string}
+ * @returns {Function}
  */
 const getRowKey = (cols) => {
-  const pk = cols.find((c) => c.pk);
-  if (pk) return pk.name;
-  if (cols.some((c) => c.name === 'id')) return 'id';
-  return cols[0]?.name || 'id'; // 兜底
+  return (record) => {
+    if (!cols || cols.length === 0) return JSON.stringify(record);
+    return cols.map((col) => String(record[col.name] ?? '')).join('__');
+  };
+};
+
+/**
+ * 根据 ColumnMeta 找到主键列名（优先主键 > id 字段）
+ * @param {ColumnMeta[]} cols
+ * @returns {string | undefined}
+ */
+const getPrimaryKeyName = (cols) => {
+  if (!cols || cols.length === 0) return undefined;
+
+  // 优先找主键
+  const pkCol = cols.find((col) => col.pk);
+  if (pkCol) {
+    return pkCol.name;
+  }
+
+  // 其次找名为 'id' 的列
+  const idCol = cols.find((col) => col.name === 'id');
+  if (idCol) {
+    return idCol.name;
+  }
+
+  // 如果都没有，返回 undefined
+  return undefined;
 };
 
 const DatabaseManager = () => {
@@ -66,6 +89,8 @@ const DatabaseManager = () => {
   // 列元信息
   const [columnsMeta, setColumnsMeta] = useState([]);
   const rowKey = useMemo(() => getRowKey(columnsMeta), [columnsMeta]);
+  // 是否用自定义 rowKey 函数
+  const isRowKeyFunc = typeof rowKey === 'function';
 
   // 构造给 Table 用的列
   const [columns4Table, setColumns4Table] = useState([]);
@@ -89,6 +114,7 @@ const DatabaseManager = () => {
   const [bulkUpdateLoading, setBulkUpdateLoading] = useState(false);
   const [bulkUpdateField, setBulkUpdateField] = useState('');
   const [bulkUpdateValue, setBulkUpdateValue] = useState('');
+  const [updatePk, setUpdatePk] = useState('id');
 
   // SideSheet 显示控制
   const [sideSheetVisible, setSideSheetVisible] = useState(false);
@@ -109,10 +135,11 @@ const DatabaseManager = () => {
   useEffect(() => {
     if (activeTable) {
       // 先重置分页和已选行
-      setPagination((prev) => ({ ...prev, current: 1 }));
+      setPagination({ current: 1, pageSize: 10, total: 0 });
       setSelectedRowKeys([]);
+      setTableData([]);
       getTableInfo(activeTable);
-      getTableData(1, pagination.pageSize);
+      getTableData(1, 10);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTable]);
@@ -186,7 +213,7 @@ const DatabaseManager = () => {
               // 如果无效，直接返回原始值
               return text;
             }
-            // 使用UTC时间格式化，确保与后端一致
+            // 使用 UTC 时间格式化，确保与后端一致
             return d.toISOString();
           };
         }
@@ -194,6 +221,7 @@ const DatabaseManager = () => {
         return columnConfig;
       });
 
+      setUpdatePk(getPrimaryKeyName(normalize)); // Use getPrimaryKeyName for updatePk
       // 末尾添加操作列
       dynamic.push({
         title: t('操作'),
@@ -202,17 +230,14 @@ const DatabaseManager = () => {
         fixed: 'right',
         render: (_, record) => (
           <Space>
-            <Button
-              type="link"
-              onClick={() => handleEditRecord(record)}
-            >
+            <Button type='link' onClick={() => handleEditRecord(record)}>
               {t('编辑')}
             </Button>
             <Popconfirm
               title={t('确认删除?')}
-              onConfirm={() => handleDelete(record[rowKey])}
+              onConfirm={() => handleDelete(record[rowKey], record)}
             >
-              <Button type="link" danger>
+              <Button type='link' danger>
                 {t('删除')}
               </Button>
             </Popconfirm>
@@ -234,12 +259,12 @@ const DatabaseManager = () => {
       const { data } = await API.get(`/api/database/tables/${activeTable}`, {
         params: { page, page_size: pageSize },
       });
-if (data.success) {
-  setTableData(Array.isArray(data.data) ? data.data : []);
-  setPagination({ current: page, pageSize, total: data.total });
-} else {
-  Toast.error(data.message);
-}
+      if (data.success) {
+        setTableData(Array.isArray(data.data) ? data.data : []);
+        setPagination({ current: page, pageSize, total: data.total });
+      } else {
+        Toast.error(data.message);
+      }
     } catch (e) {
       Toast.error(e.message);
     } finally {
@@ -275,10 +300,24 @@ if (data.success) {
   };
 
   // 删除记录
-  const handleDelete = async (id) => {
+  const handleDelete = async (id, record) => {
     try {
-      await API.delete(`/api/database/tables/${activeTable}/${id}`);
-      Toast.success(t('删除成功'));
+      const conditions = [record];
+      const { data } = await API.delete(
+        `/api/database/tables/${activeTable}/bulk-delete`,
+        {
+          data: { conditions },
+        },
+      );
+      if (data.success && Array.isArray(data.results)) {
+        const successCount = data.results.filter((r) => r.ok).length;
+        const failCount = data.results.length - successCount;
+        Toast.success(
+          `批量删除完成，成功${successCount}条，失败${failCount}条`,
+        );
+      } else {
+        Toast.error(data.message || '批量删除失败');
+      }
       // 如果删完后当前页没数据，则跳到上一页
       const left = pagination.total - 1;
       const newPage =
@@ -299,10 +338,22 @@ if (data.success) {
       setSideSheetLoading(true);
 
       if (isEdit) {
-        // 编辑
-        const recId = editingRecord?.[rowKey];
-        await API.put(`/api/database/tables/${activeTable}/${recId}`, values);
-        Toast.success(t('更新成功'));
+        const payload = { condition: editingRecord, update: values };
+        const pkName = getPrimaryKeyName(columnsMeta);
+        const pkValue = editingRecord[pkName];
+        const { data } = await API.put(
+          `/api/database/tables/${activeTable}/${pkValue}`,
+          payload,
+        );
+        if (data?.success) {
+          Toast.success(
+            typeof data.rows === 'number'
+              ? `更新成功，受影响行数：${data.rows}`
+              : t('更新成功'),
+          );
+        } else {
+          Toast.error(data?.message || t('更新失败'));
+        }
       } else {
         // 新增
         await API.post(`/api/database/tables/${activeTable}`, values);
@@ -329,6 +380,9 @@ if (data.success) {
       Toast.warning('请先选择要修改的行');
       return;
     }
+    if (!updatePk) {
+      Toast.warning('请选择一个唯一列作为更新条件');
+    }
     setBulkUpdateVisible(true);
   };
 
@@ -340,11 +394,41 @@ if (data.success) {
     }
     setBulkUpdateLoading(true);
     try {
-      await API.put(`/api/database/tables/${activeTable}/bulk-update`, {
-        ids: selectedRowKeys,
-        update: { [bulkUpdateField]: bulkUpdateValue },
+      // 构造 items: 每条数据 condition（全量列），update 为要更新的字段
+      const items = selectedRowKeys.map((key) => {
+        // 兼容 rowKey 为函数的情况
+        let record;
+        if (isRowKeyFunc) {
+          record = tableData.find((r) => rowKey(r) === key) || {};
+        } else {
+          record = tableData.find((r) => r[rowKey] === key) || {};
+        }
+        // 始终用全量列作为条件
+        const condition = {};
+        columnsMeta.forEach((col) => {
+          condition[col.name] = record[col.name];
+        });
+        return {
+          condition,
+          update: { [bulkUpdateField]: bulkUpdateValue },
+        };
       });
-      Toast.success('批量更新成功');
+      const { data } = await API.put(
+        `/api/database/tables/${activeTable}/bulk-update`,
+        {
+          items,
+        },
+      );
+      if (data.success && Array.isArray(data.results)) {
+        // 统计成功/失败
+        const successCount = data.results.filter((r) => r.ok).length;
+        const failCount = data.results.length - successCount;
+        Toast.success(
+          `批量更新完成，成功${successCount}条，失败${failCount}条`,
+        );
+      } else {
+        Toast.error(data.message || '批量更新失败');
+      }
       setBulkUpdateVisible(false);
       getTableData(pagination.current, pagination.pageSize);
     } catch (e) {
@@ -354,36 +438,62 @@ if (data.success) {
     }
   };
 
-const handleBulkDelete = async () => {
-  if (!activeTable) return;
-  if (selectedRowKeys.length === 0) {
-    Toast.warning('请先选择要删除的行');
-    return;
-  }
-  try {
-    await API.delete(`/api/database/tables/${activeTable}/bulk-delete`, {
-      data: { pk: rowKey, ids: selectedRowKeys },
-    });
-    Toast.success('批量删除成功');
-    getTableData(pagination.current, pagination.pageSize);
-  } catch (e) {
-    Toast.error(e.response?.data?.message || e.message);
-  }
-};
+  const handleBulkDelete = async () => {
+    if (!activeTable) return;
+    if (selectedRowKeys.length === 0) {
+      Toast.warning('请先选择要删除的行');
+      return;
+    }
+    try {
+      // 构造 conditions: 每条数据全量列作为条件
+      const conditions = selectedRowKeys.map((key) => {
+        let record;
+        if (isRowKeyFunc) {
+          record = tableData.find((r) => rowKey(r) === key) || {};
+        } else {
+          record = tableData.find((r) => r[rowKey] === key) || {};
+        }
+        const condition = {};
+        columnsMeta.forEach((col) => {
+          condition[col.name] = record[col.name];
+        });
+        return condition;
+      });
+
+      const { data } = await API.delete(
+        `/api/database/tables/${activeTable}/bulk-delete`,
+        {
+          data: { conditions },
+        },
+      );
+      if (data.success && Array.isArray(data.results)) {
+        const successCount = data.results.filter((r) => r.ok).length;
+        const failCount = data.results.length - successCount;
+        Toast.success(
+          `批量删除完成，成功${successCount}条，失败${failCount}条`,
+        );
+      } else {
+        Toast.error(data.message || '批量删除失败');
+      }
+      getTableData(pagination.current, pagination.pageSize);
+    } catch (e) {
+      Toast.error(e.response?.data?.message || e.message);
+    }
+  };
 
   return (
     <Content style={{ padding: 24 }}>
       <Spin spinning={loading}>
-        <Card className="!rounded-2xl shadow-sm border-0 mb-6">
+        <Card className='!rounded-2xl shadow-sm border-0 mb-6'>
           <div
-            className="flex items-center justify-between p-6 rounded-xl"
-                  style={{
-                      background: '#fff',
-                    position: 'relative',
-                  }}
+            className='flex items-center justify-between p-6 rounded-xl'
+            style={{
+              background: '#fff',
+              position: 'relative',
+            }}
           >
-            <div className="text-left">
-              <Title heading={4} className="m-0">
+            <div className='text-left'>
+              <Title heading={4} className='m-0'>
                 {t('数据库管理')}
               </Title>
               <Text style={{ opacity: 0.8 }}>
@@ -406,54 +516,54 @@ const handleBulkDelete = async () => {
                   ))}
                 </Select>
                 <Button
-                  theme="light"
-                  type="primary"
+                  theme='light'
+                  type='primary'
                   icon={<IconServer />}
                   onClick={() => getTableData()}
                   disabled={!activeTable}
-                  className="!rounded-full"
+                  className='!rounded-full'
                 >
                   {t('刷新')}
                 </Button>
                 <Button
-                  theme="solid"
+                  theme='solid'
                   icon={<IconPlusCircle />}
                   onClick={handleCreate}
                   disabled={!activeTable}
-                  className="!rounded-full"
+                  className='!rounded-full'
                 >
                   {t('新增记录')}
                 </Button>
                 <Button
-                  theme="solid"
+                  theme='solid'
                   onClick={handleBulkUpdateOpen}
                   disabled={!activeTable}
-                  className="!rounded-full"
+                  className='!rounded-full'
                 >
                   批量修改
                 </Button>
-<Popconfirm
-  position="topRight"
-  showArrow
-  autoAdjustOverflow
-  title="确认批量删除？"
-  content="此操作不可逆，请确认是否删除"
-  onConfirm={handleBulkDelete}
->
-  <Button
-    theme="solid"
-    icon={<IconDelete />}
-    disabled={!activeTable}
-    className="!rounded-full"
-  >
-    批量删除
-  </Button>
-</Popconfirm>
+                <Popconfirm
+                  position='topRight'
+                  showArrow
+                  autoAdjustOverflow
+                  title='确认批量删除？'
+                  content='此操作不可逆，请确认是否删除'
+                  onConfirm={handleBulkDelete}
+                >
+                  <Button
+                    theme='solid'
+                    icon={<IconDelete />}
+                    disabled={!activeTable}
+                    className='!rounded-full'
+                  >
+                    批量删除
+                  </Button>
+                </Popconfirm>
               </Space>
             </div>
           </div>
 
-          <div className="p-6">
+          <div className='p-6'>
             {activeTable ? (
               <Table
                 columns={columns4Table}
@@ -461,16 +571,53 @@ const handleBulkDelete = async () => {
                 rowKey={rowKey}
                 scroll={{ x: 'max-content' }}
                 pagination={{
-                  current: pagination.current,
+                  currentPage: pagination.current,
                   pageSize: pagination.pageSize,
                   total: pagination.total,
                   showSizeChanger: true,
-                  pageSizeOptions: ['10', '20', '50', '100'],
-                  onChange: (current, pageSize) => getTableData(current, pageSize),
+                  pageSizeOptions: [10, 20, 50, 100],
+                  onChange: (current, size) => {
+                    setPagination((prev) => ({
+                      ...prev,
+                      current,
+                      pageSize: size,
+                    }));
+                    getTableData(current, size);
+                  },
                 }}
                 rowSelection={{
                   selectedRowKeys,
-                  onChange: (keys) => setSelectedRowKeys(keys),
+                  onChange: (keys) => {
+                    // 过滤掉被禁用的行
+                    const validKeys = keys.filter((key) => {
+                      let record;
+                      if (isRowKeyFunc) {
+                        record = tableData.find((r) => rowKey(r) === key) || {};
+                      } else {
+                        record = tableData.find((r) => r[rowKey] === key) || {};
+                      }
+                      // 禁止选择所有字段都为空的行
+                      return !(
+                        isRowKeyFunc &&
+                        columnsMeta.length > 0 &&
+                        columnsMeta.every((col) => {
+                          const v = record[col.name];
+                          return v === undefined || v === null || v === '';
+                        })
+                      );
+                    });
+                    setSelectedRowKeys(validKeys);
+                  },
+                  getCheckboxProps: (record) => ({
+                    // 禁止选择所有字段都为空的行
+                    disabled:
+                      isRowKeyFunc &&
+                      columnsMeta.length > 0 &&
+                      columnsMeta.every((col) => {
+                        const v = record[col.name];
+                        return v === undefined || v === null || v === '';
+                      }),
+                  }),
                 }}
               />
             ) : (
@@ -488,15 +635,15 @@ const handleBulkDelete = async () => {
           title={
             <Space>
               {isEdit ? (
-                <Tag color="blue" shape="circle">
+                <Tag color='blue' shape='circle'>
                   {t('更新')}
                 </Tag>
               ) : (
-                <Tag color="green" shape="circle">
+                <Tag color='green' shape='circle'>
                   {t('新建')}
                 </Tag>
               )}
-              <Title heading={4} className="m-0">
+              <Title heading={4} className='m-0'>
                 {isEdit ? t('编辑记录信息') : t('创建新的记录')}
               </Title>
             </Space>
@@ -504,12 +651,12 @@ const handleBulkDelete = async () => {
           visible={sideSheetVisible}
           width={600}
           footer={
-            <div className="flex justify-end bg-white">
+            <div className='flex justify-end bg-white'>
               <Space>
                 <Button
-                  theme="solid"
-                  size="large"
-                  className="!rounded-full"
+                  theme='solid'
+                  size='large'
+                  className='!rounded-full'
                   onClick={handleSubmit}
                   icon={<IconSave />}
                   loading={sideSheetLoading}
@@ -517,10 +664,10 @@ const handleBulkDelete = async () => {
                   {t('提交')}
                 </Button>
                 <Button
-                  theme="light"
-                  size="large"
-                  className="!rounded-full"
-                  type="primary"
+                  theme='light'
+                  size='large'
+                  className='!rounded-full'
+                  type='primary'
                   onClick={handleCancel}
                   icon={<IconClose />}
                 >
@@ -533,32 +680,32 @@ const handleBulkDelete = async () => {
           onCancel={handleCancel}
         >
           <Spin spinning={sideSheetLoading}>
-            <div className="p-6">
-              <Card className="!rounded-2xl shadow-sm border-0 mb-6">
+            <div className='p-6'>
+              <Card className='!rounded-2xl shadow-sm border-0 mb-6'>
                 <div
-                  className="flex items-center mb-4 p-6 rounded-xl"
+                  className='flex items-center mb-4 p-6 rounded-xl'
                   style={{
                     background: '#fff',
                     position: 'relative',
                   }}
                 >
-                  <div className="absolute inset-0 overflow-hidden">
-                    <div className="absolute -top-10 -right-10 w-40 h-40 bg-white opacity-5 rounded-full"></div>
-                    <div className="absolute -bottom-8 -left-8 w-24 h-24 bg-white opacity-10 rounded-full"></div>
+                  <div className='absolute inset-0 overflow-hidden'>
+                    <div className='absolute -top-10 -right-10 w-40 h-40 bg-white opacity-5 rounded-full'></div>
+                    <div className='absolute -bottom-8 -left-8 w-24 h-24 bg-white opacity-10 rounded-full'></div>
                   </div>
-                  <div className="w-10 h-10 rounded-full bg-white/20 flex items-center justify-center mr-4 relative">
-                    <IconUserGroup size="large" style={{ color: '#ffffff' }} />
+                  <div className='w-10 h-10 rounded-full bg-white/20 flex items-center justify-center mr-4 relative'>
+                    <IconUserGroup size='large' style={{ color: '#ffffff' }} />
                   </div>
-                  <div className="relative">
+                  <div className='relative'>
                     <Text
                       style={{ color: '#ffffff' }}
-                      className="text-lg font-medium"
+                      className='text-lg font-medium'
                     >
                       {t('记录信息')}
                     </Text>
                     <div
                       style={{ color: '#ffffff' }}
-                      className="text-sm opacity-80"
+                      className='text-sm opacity-80'
                     >
                       {t('填写或编辑该记录的基础字段信息')}
                     </div>
@@ -566,12 +713,14 @@ const handleBulkDelete = async () => {
                 </div>
 
                 <Form
-                  labelPosition="inset"
-                  getFormApi={(api) => (formApiRef.current = api)}
+                  labelPosition='inset'
+                  getFormApi={(api) => {
+                    formApiRef.current = api;
+                  }}
                 >
                   {columnsMeta.map((col) => {
                     const disabled =
-                      col.pk || (col.extra && col.extra.includes('auto_increment'));
+                      col.extra && col.extra.includes('auto_increment');
                     return (
                       <Form.Input
                         key={col.name}
@@ -589,43 +738,6 @@ const handleBulkDelete = async () => {
                   })}
                 </Form>
               </Card>
-
-              <Card className="!rounded-2xl shadow-sm border-0">
-                <div
-                  className="flex items-center mb-4 p-6 rounded-xl"
-                  style={{
-                    background: '#fff',
-                    position: 'relative',
-                  }}
-                >
-                  <div className="absolute inset-0 overflow-hidden">
-                    <div className="absolute -top-10 -right-10 w-40 h-40 bg-white opacity-5 rounded-full"></div>
-                    <div className="absolute -bottom-8 -left-8 w-24 h-24 bg-white opacity-10 rounded-full"></div>
-                  </div>
-                  <div className="w-10 h-10 rounded-full bg-white/20 flex items-center justify-center mr-4 relative">
-                    <IconDelete size="large" style={{ color: '#ffffff' }} />
-                  </div>
-                  <div className="relative">
-                    <Text
-                      style={{ color: '#ffffff' }}
-                      className="text-lg font-medium"
-                    >
-                      {t('注意事项')}
-                    </Text>
-                    <div
-                      style={{ color: '#ffffff' }}
-                      className="text-sm opacity-80"
-                    >
-                      {t('请谨慎操作记录的增删改，以免造成数据损失')}
-                    </div>
-                  </div>
-                </div>
-                <div className="p-4">
-                  <Text type="tertiary" className="block text-xs">
-                    {t('更多高级操作可在侧边栏批量进行')}
-                  </Text>
-                </div>
-              </Card>
             </div>
           </Spin>
         </SideSheet>
@@ -634,7 +746,7 @@ const handleBulkDelete = async () => {
         <SideSheet
           visible={bulkUpdateVisible}
           onCancel={() => setBulkUpdateVisible(false)}
-          title="批量更新字段"
+          title='批量更新字段'
           width={500}
           closeIcon={null}
           footer={
@@ -643,28 +755,39 @@ const handleBulkDelete = async () => {
                 <Button
                   loading={bulkUpdateLoading}
                   onClick={handleBulkUpdateSubmit}
-                  type="primary"
+                  type='primary'
                 >
                   提交
                 </Button>
-                <Button onClick={() => setBulkUpdateVisible(false)}>取消</Button>
+                <Button onClick={() => setBulkUpdateVisible(false)}>
+                  取消
+                </Button>
               </Space>
             </div>
           }
         >
           <div style={{ padding: 16 }}>
             <Form>
-              <Form.Input
-                field="bulkField"
-                label="字段名"
+              <Form.Select
+                field='bulkField'
+                label='字段名'
                 onChange={(val) => setBulkUpdateField(val)}
-              />
+              >
+                {columnsMeta.map((col) => (
+                  <Select.Option key={col.name} value={col.name}>
+                    {col.name}
+                  </Select.Option>
+                ))}
+              </Form.Select>
               <Form.Input
-                field="bulkValue"
-                label="字段值"
+                field='bulkValue'
+                label='字段值'
                 onChange={(val) => setBulkUpdateValue(val)}
               />
             </Form>
+            <div style={{ color: '#888', fontSize: 12, marginTop: 8 }}>
+              批量更新将自动以 id 为条件，无 id 时用全量列作为条件
+            </div>
           </div>
         </SideSheet>
       </Spin>
