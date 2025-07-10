@@ -29,6 +29,7 @@ const routerMap = {
   about: '/about',
   detail: '/console',
   pricing: '/pricing',
+  database: '/console/database',
   task: '/console/task',
   playground: '/console/playground',
   personal: '/console/personal',
@@ -55,6 +56,11 @@ const SiderBar = () => {
           localStorage.getItem('enable_data_export') === 'true'
             ? ''
             : 'tableHiddle',
+      },
+      {
+        text: t('数据库管理'),
+        itemKey: 'database',
+        to: '/database'
       },
       {
         text: t('API令牌'),

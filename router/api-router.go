@@ -169,5 +169,18 @@ func SetApiRouter(router *gin.Engine) {
 			taskRoute.GET("/self", middleware.UserAuth(), controller.GetUserTask)
 			taskRoute.GET("/", middleware.AdminAuth(), controller.GetAllTask)
 		}
-	}
+
+		databaseRoute := apiRouter.Group("/database")
+		databaseRoute.Use(middleware.AdminAuth())
+		{
+			databaseRoute.GET("/tables", controller.GetTables)
+			databaseRoute.GET("/tables/:name", controller.GetTableData)
+			databaseRoute.GET("/tables/:name/info", controller.GetTableInfo)
+			databaseRoute.POST("/tables/:name", controller.CreateTableData)
+			databaseRoute.PUT("/tables/:name/bulk-update", controller.BulkUpdateTableData)
+			databaseRoute.PUT("/tables/:name/:id", controller.UpdateTableData)
+			databaseRoute.DELETE("/tables/:name/bulk-delete", controller.BulkDeleteTableData)
+			databaseRoute.DELETE("/tables/:name/:id", controller.DeleteTableData)
+		}
+}
 }

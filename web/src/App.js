@@ -22,6 +22,7 @@ import Midjourney from './pages/Midjourney';
 import Pricing from './pages/Pricing/index.js';
 import Task from './pages/Task/index.js';
 import Playground from './pages/Playground/index.js';
+import DatabaseManagement from './pages/Database';
 import OAuth2Callback from './components/auth/OAuth2Callback.js';
 import PersonalSetting from './components/settings/PersonalSetting.js';
 import Setup from './pages/Setup/index.js';
@@ -249,6 +250,16 @@ function App() {
             <PrivateRoute>
               <Suspense fallback={<Loading></Loading>} key={location.pathname}>
                 <Task />
+              </Suspense>
+            </PrivateRoute>
+          }
+        />
+        <Route
+          path='/console/database'
+          element={
+            <PrivateRoute>
+              <Suspense fallback={<Loading></Loading>} key={location.pathname}>
+                <DatabaseManagement />
               </Suspense>
             </PrivateRoute>
           }
