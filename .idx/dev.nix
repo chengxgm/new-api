@@ -23,23 +23,7 @@
     ];
 
     # Enable previews
-    previews = {
-      enable = true;
-      previews = {
-        web = {
-          command = [
-            "npm"
-            "run"
-            "dev"
-            "--"
-            "--port"
-            "$PORT"
-          ];
-          manager = "web";
-          cwd = "web";
-        };
-      };
-    };
+    previews = {};
 
     # Workspace lifecycle hooks
     workspace = {
