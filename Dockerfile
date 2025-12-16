@@ -11,6 +11,7 @@ RUN --mount=type=cache,target=~/.yarn \
 
 COPY web/ ./
 COPY ./VERSION ./
+ENV NODE_OPTIONS=--max-old-space-size=6144
 RUN DISABLE_ESLINT_PLUGIN=true VITE_REACT_APP_VERSION=$(cat VERSION) yarn build
 
 FROM golang:alpine AS builder2
