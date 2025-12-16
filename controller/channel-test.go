@@ -83,6 +83,11 @@ func testChannel(channel *model.Channel, testModel string, endpointType string) 
 			requestPath = endpointInfo.Path
 		}
 	} else {
+		// OpenRouter channel defaults to /v1/responses
+		if channel.Type == constant.ChannelTypeOpenRouter {
+			requestPath = "/v1/responses"
+			endpointType = string(constant.EndpointTypeOpenAIResponse)
+		}
 		// 如果没有指定端点类型，使用原有的自动检测逻辑
 		// 先判断是否为 Embedding 模型
 		if strings.Contains(strings.ToLower(testModel), "embedding") ||
