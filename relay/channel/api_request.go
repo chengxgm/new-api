@@ -38,14 +38,20 @@ func SetupApiRequestHeader(info *common.RelayInfo, c *gin.Context, req *http.Hea
 	}
 }
 
-// processHeaderOverride 处理请求头覆盖，支持变量替换
+// applyHeaderOverride 处理请求头覆盖，支持变量替换
 // 支持的变量：{api_key}
-func processHeaderOverride(info *common.RelayInfo) (map[string]string, error) {
-	headerOverride := make(map[string]string)
+// 当值为空字符串时，删除该请求头
+func applyHeaderOverride(info *common.RelayInfo, header *http.Header) error {
 	for k, v := range info.HeadersOverride {
 		str, ok := v.(string)
 		if !ok {
-			return nil, types.NewError(nil, types.ErrorCodeChannelHeaderOverrideInvalid)
+			return types.NewError(nil, types.ErrorCodeChannelHeaderOverrideInvalid)
+		}
+
+		// 空字符串表示删除该请求头
+		if str == "" {
+			header.Del(k)
+			continue
 		}
 
 		// 替换支持的变量
@@ -53,9 +59,9 @@ func processHeaderOverride(info *common.RelayInfo) (map[string]string, error) {
 			str = strings.ReplaceAll(str, "{api_key}", info.ApiKey)
 		}
 
-		headerOverride[k] = str
+		header.Set(k, str)
 	}
-	return headerOverride, nil
+	return nil
 }
 
 func DoApiRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody io.Reader) (*http.Response, error) {
@@ -71,16 +77,13 @@ func DoApiRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody
 		return nil, fmt.Errorf("new request failed: %w", err)
 	}
 	headers := req.Header
-	headerOverride, err := processHeaderOverride(info)
-	if err != nil {
-		return nil, err
-	}
-	for key, value := range headerOverride {
-		headers.Set(key, value)
-	}
 	err = a.SetupRequestHeader(c, &headers, info)
 	if err != nil {
 		return nil, fmt.Errorf("setup request header failed: %w", err)
+	}
+	err = applyHeaderOverride(info, &headers)
+	if err != nil {
+		return nil, err
 	}
 	resp, err := doRequest(c, req, info)
 	if err != nil {
@@ -104,16 +107,13 @@ func DoFormRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBod
 	// set form data
 	req.Header.Set("Content-Type", c.Request.Header.Get("Content-Type"))
 	headers := req.Header
-	headerOverride, err := processHeaderOverride(info)
-	if err != nil {
-		return nil, err
-	}
-	for key, value := range headerOverride {
-		headers.Set(key, value)
-	}
 	err = a.SetupRequestHeader(c, &headers, info)
 	if err != nil {
 		return nil, fmt.Errorf("setup request header failed: %w", err)
+	}
+	err = applyHeaderOverride(info, &headers)
+	if err != nil {
+		return nil, err
 	}
 	resp, err := doRequest(c, req, info)
 	if err != nil {
@@ -128,16 +128,13 @@ func DoWssRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody
 		return nil, fmt.Errorf("get request url failed: %w", err)
 	}
 	targetHeader := http.Header{}
-	headerOverride, err := processHeaderOverride(info)
-	if err != nil {
-		return nil, err
-	}
-	for key, value := range headerOverride {
-		targetHeader.Set(key, value)
-	}
 	err = a.SetupRequestHeader(c, &targetHeader, info)
 	if err != nil {
 		return nil, fmt.Errorf("setup request header failed: %w", err)
+	}
+	err = applyHeaderOverride(info, &targetHeader)
+	if err != nil {
+		return nil, err
 	}
 	targetHeader.Set("Content-Type", c.Request.Header.Get("Content-Type"))
 	targetConn, _, err := websocket.DefaultDialer.Dial(fullRequestURL, targetHeader)
