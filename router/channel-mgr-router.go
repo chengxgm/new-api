@@ -17,7 +17,6 @@ func SetChannelMgrRouter(apiRouter *gin.RouterGroup) {
 		mgr.POST("/create", controller.ChannelMgrCreate)
 		mgr.POST("/update", controller.ChannelMgrUpdate)
 		mgr.POST("/delete", controller.ChannelMgrDelete)
-		mgr.POST("/copy", controller.ChannelMgrCopy)
 		mgr.POST("/batch_update", controller.ChannelMgrBatchUpdate)
 		mgr.POST("/batch_copy", controller.ChannelMgrBatchCopy)
 	}

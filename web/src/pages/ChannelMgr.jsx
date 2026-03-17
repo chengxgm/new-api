@@ -201,16 +201,6 @@ const ChannelMgr = () => {
         }
     };
 
-    const handleCopyRow = async (row) => {
-        try {
-            await API.post('/api/channel/mgr/copy', {id: row.id});
-            showSuccess(t('复制成功'));
-            await loadData(page, pageSize);
-        } catch (e) {
-            showError(e?.response?.data?.error || e?.message || t('复制失败'));
-        }
-    };
-
     const handleDeleteRow = (row) => {
         Modal.confirm({
             title: t('确定要删除吗？'),
@@ -297,8 +287,10 @@ const ChannelMgr = () => {
                 id: templateId,
                 keys,
             });
-            const count = res?.data?.count ?? keys.length;
-            showSuccess(t('批量复制新增成功，共新增 {{count}} 行', {count}));
+            const count = res?.data?.count ?? 0;
+            const templates = res?.data?.templates ?? 0;
+            const newKeys = res?.data?.new_keys ?? keys.length;
+            showSuccess(t('批量复制新增成功，{{templates}} 个模板 × {{newKeys}} 个 key = 共新增 {{count}} 行', {templates, newKeys, count}));
             setBatchCopyVisible(false);
             await loadData(page, pageSize);
         } catch (e) {
@@ -320,14 +312,11 @@ const ChannelMgr = () => {
             title: t('操作'),
             key: '__actions',
             fixed: 'right',
-            width: 220,
+            width: 160,
             render: (_, record) => (
                 <Space>
                     <Button size='small' onClick={() => openEditDialog(record)}>
                         {t('编辑')}
-                    </Button>
-                    <Button size='small' type='tertiary' onClick={() => handleCopyRow(record)}>
-                        {t('复制')}
                     </Button>
                     <Button size='small' type='danger' onClick={() => handleDeleteRow(record)}>
                         {t('删除')}
@@ -512,7 +501,7 @@ const ChannelMgr = () => {
             >
                 <div className='flex flex-col gap-2'>
                     <Typography.Text type='tertiary'>
-                        {t('将以当前选中的这一行作为模板，按下面每行的 key 复制新增一行记录，仅 key 字段不同。')}
+                        {t('将根据选中行的 key 查找所有相同 key 的行作为模板组，然后与下方输入的每个新 key 做笛卡尔积批量创建新记录。')}
                     </Typography.Text>
                     <TextArea
                         value={batchCopyKeysText}

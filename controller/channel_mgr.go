@@ -795,61 +795,10 @@ func ChannelMgrDelete(c *gin.Context) {
 	})
 }
 
-// POST /api/channel/mgr/copy
-// body: {"id": 1}
-func ChannelMgrCopy(c *gin.Context) {
-	if c.Request.Method != http.MethodPost {
-		c.Status(http.StatusMethodNotAllowed)
-		return
-	}
-	var req struct {
-		ID interface{} `json:"id"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		mgrWriteError(c, http.StatusBadRequest, err)
-		return
-	}
-	id := int(mgrToInt64(req.ID))
-	if id <= 0 {
-		mgrWriteErrorMsg(c, http.StatusBadRequest, "invalid id")
-		return
-	}
-
-	ch, err := model.GetChannelById(id, true)
-	if err != nil {
-		mgrWriteError(c, http.StatusNotFound, err)
-		return
-	}
-
-	newCh := *ch
-	newCh.Id = 0
-
-	tx := model.DB.Begin()
-	if tx.Error != nil {
-		mgrWriteError(c, http.StatusInternalServerError, tx.Error)
-		return
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	if err := tx.Create(&newCh).Error; err != nil {
-		mgrWriteError(c, http.StatusInternalServerError, err)
-		return
-	}
-	if err := newCh.AddAbilities(tx); err != nil {
-		mgrWriteError(c, http.StatusInternalServerError, err)
-		return
-	}
-	if err := tx.Commit().Error; err != nil {
-		mgrWriteError(c, http.StatusInternalServerError, err)
-		return
-	}
-
-	mgrWriteJSON(c, http.StatusOK, gin.H{"id": newCh.Id})
-}
-
 // POST /api/channel/mgr/batch_copy
 // body: {"id": 1, "keys": ["k1", "k2"]}
-// behavior: copy template row, override key, reset used_quota=0
+// behavior: find all rows sharing the same key as the selected row (template group),
+// then do a cartesian product with the provided new keys to create n×m new channels.
 func ChannelMgrBatchCopy(c *gin.Context) {
 	if c.Request.Method != http.MethodPost {
 		c.Status(http.StatusMethodNotAllowed)
@@ -892,26 +841,52 @@ func ChannelMgrBatchCopy(c *gin.Context) {
 		return
 	}
 
+	// Step 1: look up the selected row to get its key
 	ch, err := model.GetChannelById(id, true)
 	if err != nil {
 		mgrWriteError(c, http.StatusNotFound, err)
 		return
 	}
+	templateKey := ch.Key
 
-	newChannels := make([]model.Channel, 0, len(cleaned))
-	for _, k := range cleaned {
-		nc := *ch
-		nc.Id = 0
-		nc.Key = k
-		nc.UsedQuota = 0
-		newChannels = append(newChannels, nc)
+	// Step 2: find all rows with the same key (template group)
+	var templates []model.Channel
+	if err := model.DB.Where(clause.Eq{Column: "key", Value: templateKey}).Find(&templates).Error; err != nil {
+		mgrWriteError(c, http.StatusInternalServerError, err)
+		return
+	}
+	if len(templates) == 0 {
+		mgrWriteErrorMsg(c, http.StatusNotFound, "no template rows found")
+		return
+	}
+
+	// Step 3: cartesian product — n templates × m new keys
+	newChannels := make([]model.Channel, 0, len(templates)*len(cleaned))
+	now := common.GetTimestamp()
+	for _, tpl := range templates {
+		for _, k := range cleaned {
+			nc := tpl
+			nc.Id = 0
+			nc.Key = k
+			nc.UsedQuota = 0
+			nc.OtherInfo = ""
+			nc.CreatedTime = now
+			nc.TestTime = 0
+			nc.Status = 1
+			newChannels = append(newChannels, nc)
+		}
 	}
 
 	if err := model.BatchInsertChannels(newChannels); err != nil {
 		mgrWriteError(c, http.StatusInternalServerError, err)
 		return
 	}
-	mgrWriteJSON(c, http.StatusOK, gin.H{"ok": true, "count": len(newChannels)})
+	mgrWriteJSON(c, http.StatusOK, gin.H{
+		"ok":        true,
+		"count":     len(newChannels),
+		"templates": len(templates),
+		"new_keys":  len(cleaned),
+	})
 }
 
 // POST /api/channel/mgr/batch_update
