@@ -262,6 +262,10 @@ func processHeaderOverride(info *common.RelayInfo, c *gin.Context) (map[string]s
 			return nil, types.NewError(err, types.ErrorCodeChannelHeaderOverrideInvalid)
 		}
 		if !include {
+			// If the original value was explicitly empty, mark for header deletion
+			if strings.TrimSpace(str) == "" {
+				headerOverride[key] = ""
+			}
 			continue
 		}
 
@@ -279,6 +283,13 @@ func applyHeaderOverrideToRequest(req *http.Request, headerOverride map[string]s
 		return
 	}
 	for key, value := range headerOverride {
+		if value == "" {
+			req.Header.Del(key)
+			if strings.EqualFold(key, "Host") {
+				req.Host = ""
+			}
+			continue
+		}
 		req.Header.Set(key, value)
 		// set Host in req
 		if strings.EqualFold(key, "Host") {
@@ -368,6 +379,10 @@ func DoWssRequest(a Adaptor, c *gin.Context, info *common.RelayInfo, requestBody
 		return nil, err
 	}
 	for key, value := range headerOverride {
+		if value == "" {
+			targetHeader.Del(key)
+			continue
+		}
 		targetHeader.Set(key, value)
 	}
 	targetHeader.Set("Content-Type", c.Request.Header.Get("Content-Type"))
